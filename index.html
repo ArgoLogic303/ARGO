@@ -1,3 +1,4 @@
+
 <!DOCTYPE html>
 <html lang="pl">
   <head>
@@ -1297,7 +1298,7 @@
         <button class="distribution-button" id="distribution">
           Dystrybucja ARGO
         </button>
-        <div class="beta-version">V 3.1 ALFA</div>
+        <div class="beta-version">V 3.3 OFFICIAL</div>
       </div>
     </aside>
 
@@ -1563,7 +1564,7 @@
 
           <div class="console-output" id="consoleOutput">
             Status: Offline
-            Build: ARGO 3.1 ALFA
+            Build: ARGO 3.3 OFFICIAL
             Dostęp: zablokowany
           </div>
         </div>
@@ -1577,7 +1578,7 @@
           <div class="console-grid">
             <div class="console-panel">
               <h4>Status systemu</h4>
-              <div class="console-stat-row"><span>Build</span><span>ARGO 3.1 ALFA</span></div>
+              <div class="console-stat-row"><span>Build</span><span>ARGO 3.3 OFFICIAL</span></div>
               <div class="console-stat-row"><span>Sesja aktywna od</span><span id="consoleSessionSince">—</span></div>
               <div class="console-stat-row"><span>Czas trwania sesji</span><span id="consoleUptime">00:00:00</span></div>
               <div class="console-stat-row"><span>Przeglądarka</span><span id="consoleBrowser">—</span></div>
@@ -1654,7 +1655,7 @@
 
           <div class="console-panel">
             <h4>Mini terminal</h4>
-            <div class="console-terminal" id="consoleTerminal">ARGO DEV TERMINAL v3.1
+            <div class="console-terminal" id="consoleTerminal">ARGO DEV TERMINAL v3.3
 Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają historię.
 ></div>
             <div class="console-terminal-input-row">
@@ -1709,7 +1710,7 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
         <h3>Dystrybucja ARGO</h3>
         <p><strong>Model:</strong> Doctus</p>
         <p><strong>Dystrybutor:</strong> Przemysław Broda</p>
-        <p><strong>Wersja:</strong> 3.1 ALFA</p>
+        <p><strong>Wersja:</strong> 3.3 OFFICIAL</p>
       </div>
     </div>
 
@@ -2045,7 +2046,10 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
         "czego dokładnie Ci potrzeba?"
       ];
 
+      // 3.3: pamięć i warstwa odpowiedzi są większe niż w poprzedniej, szablonowej wersji.
       const recentResponses = [];
+      const chatHistory = [];
+      const CHAT_MEMORY_LIMIT = 40;
 
       function pickWithoutRepeat(pool) {
         for (let attempt = 0; attempt < 10; attempt++) {
@@ -2057,7 +2061,7 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
 
       function rememberResponse(text) {
         recentResponses.push(text);
-        if (recentResponses.length > 6) recentResponses.shift();
+        if (recentResponses.length > 30) recentResponses.shift();
       }
 
       function buildFallbackResponse(ctx) {
@@ -2066,6 +2070,92 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
         const bridge = FALLBACK_BRIDGES[Math.floor(Math.random() * FALLBACK_BRIDGES.length)];
         const question = FALLBACK_QUESTIONS[Math.floor(Math.random() * FALLBACK_QUESTIONS.length)];
         return `${opener} ${core} ${bridge} ${question}`;
+      }
+
+      function rememberChatTurn(role, text) {
+        chatHistory.push({ role, text });
+        if (chatHistory.length > CHAT_MEMORY_LIMIT) chatHistory.shift();
+      }
+
+      function cleanKnowledgeText(text) {
+        const box = document.createElement("div");
+        box.innerHTML = text || "";
+        return (box.textContent || "").replace(/\s+/g, " ").trim();
+      }
+
+      function knowledgeQuery(message) {
+        return message
+          .replace(/^(czy|co|kto|gdzie|kiedy|dlaczego|jak|jaki|jaka|jakie|opowiedz o|wyjasnij|wyjaśnij|powiedz mi o)\s+/i, "")
+          .replace(/[?!.]+$/g, "")
+          .trim();
+      }
+
+      async function findKnowledgeAnswer(message) {
+        const query = knowledgeQuery(message);
+        if (query.length < 3 || query.length > 140) return null;
+
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 3500);
+
+        try {
+          const search = await fetch(
+            `https://pl.wikipedia.org/w/rest.php/v1/search/page?q=${encodeURIComponent(query)}&limit=1`,
+            { signal: controller.signal }
+          );
+          if (!search.ok) return null;
+
+          const data = await search.json();
+          const result = data.pages && data.pages[0];
+          if (!result || !result.key) return null;
+
+          const summary = await fetch(
+            `https://pl.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(result.key)}`,
+            { signal: controller.signal }
+          );
+          if (!summary.ok) return null;
+
+          const page = await summary.json();
+          const extract = cleanKnowledgeText(page.extract);
+          if (!extract) return null;
+
+          const source = page.content_urls?.desktop?.page;
+          return `${page.title || result.title}\n${extract}${source ? `\n\nŹródło: ${source}` : ""}`;
+        } catch {
+          return null;
+        } finally {
+          clearTimeout(timeout);
+        }
+      }
+
+      function calculateFromMessage(message) {
+        const expression = message
+          .replace(/^(oblicz|policz|ile to jest|wynik|calculate)\s*:?[\s]*/i, "")
+          .replace(/,/g, ".")
+          .replace(/[×x]/g, "*")
+          .replace(/÷/g, "/")
+          .trim();
+
+        if (!/^[0-9+*/().\s%-]+$/.test(expression) || !/[+*/%-]/.test(expression)) return null;
+
+        try {
+          const result = Function(`"use strict"; return (${expression})`)();
+          if (!Number.isFinite(result)) return null;
+          return `Wynik: ${Number(result.toFixed(10))}.`;
+        } catch {
+          return null;
+        }
+      }
+
+      function buildExpandedLocalResponse(ctx) {
+        const previousTopic = [...chatHistory].reverse().find((turn) => turn.role === "user")?.text;
+        const topic = ctx.topic === "ten temat" && previousTopic ? extractTopic(previousTopic) : ctx.topic;
+        const asksForPlan = /plan|krok|zrobic|zrobić|organiz|projekt|nauczyc|nauczyć|przygot/i.test(ctx.input);
+
+        if (asksForPlan) {
+          return `Dla tematu „${topic}” proponuję podejście w czterech etapach:\n\n1. Ustal efekt końcowy — co ma być gotowe i po czym poznamy, że zadanie się udało.\n2. Podziel pracę na małe czynności, które da się wykonać w jednym podejściu.\n3. Nadaj kolejność: najpierw element blokujący, potem reszta.\n4. Sprawdź wynik i popraw tylko to, co nie spełnia celu.\n\nJeśli podasz ograniczenia (czas, budżet, narzędzia albo poziom zaawansowania), dopasuję plan konkretnie do Twojej sytuacji.`;
+        }
+
+        return `Nie chcę zgadywać przy pytaniu o „${topic}”. W wersji 3.3 mogę zachować kontekst rozmowy, policzyć wyrażenia i — gdy jest dostęp do internetu — wyszukać sprawdzalne informacje encyklopedyczne.\n\nNapisz proszę pytanie możliwie konkretnie: czego dotyczy, jaki ma być efekt oraz co już wiesz lub próbowałeś. Wtedy przygotuję odpowiedź lub plan zamiast ogólnej wskazówki.`;
       }
 
       function matchIntent(normalizedInput) {
@@ -2083,7 +2173,7 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
         return bestScore > 0 ? best : null;
       }
 
-      function generateAssistantReply(rawMessage) {
+      async function generateAssistantReply(rawMessage) {
         const normalized = normalizeText(rawMessage);
         const ctx = {
           input: rawMessage,
@@ -2093,16 +2183,26 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
           modules: activeModuleNames()
         };
 
+        const calculation = calculateFromMessage(rawMessage);
+        if (calculation) {
+          rememberResponse(calculation);
+          rememberChatTurn("assistant", calculation);
+          return calculation;
+        }
+
         const intent = matchIntent(normalized);
         let reply;
 
         if (intent) {
           reply = fillTemplate(pickWithoutRepeat(intent.templates), ctx);
         } else {
-          reply = buildFallbackResponse(ctx);
+          const looksLikeQuestion = /\?|^(co|kto|gdzie|kiedy|dlaczego|jak|jaki|jaka|jakie|czy|opowiedz|wyjasnij|wyjaśnij)\b/i.test(rawMessage.trim());
+          const knowledge = looksLikeQuestion ? await findKnowledgeAnswer(rawMessage) : null;
+          reply = knowledge || buildExpandedLocalResponse(ctx);
         }
 
         rememberResponse(reply);
+        rememberChatTurn("assistant", reply);
         return reply;
       }
 
@@ -2115,11 +2215,12 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
         if (!value) return;
 
         addMessage("user", value);
+        rememberChatTurn("user", value);
         input.value = "";
 
         const delay = 250 + Math.floor(Math.random() * 400);
-        setTimeout(() => {
-          addMessage("assistant", generateAssistantReply(value));
+        setTimeout(async () => {
+          addMessage("assistant", await generateAssistantReply(value));
         }, delay);
       });
 
@@ -2942,7 +3043,7 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
       /* ---------- Backup / restore ---------- */
       document.getElementById("actionFullBackup").addEventListener("click", () => {
         const backup = {
-          build: "ARGO 3.1 ALFA",
+          build: "ARGO 3.3 OFFICIAL",
           exportedAt: new Date().toISOString(),
           files,
           moduleState: loadModuleState(),
@@ -3085,7 +3186,7 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
             termPrint(TERMINAL_MANUAL[arg.toLowerCase()] || `Brak instrukcji dla "${arg}".`);
             break;
           case "status":
-            termPrint("Status: Online\nBuild: ARGO 3.1 ALFA\nTryb: Developer\nSystem: Active");
+            termPrint("Status: Online\nBuild: ARGO 3.3 OFFICIAL\nTryb: Developer\nSystem: Active");
             break;
           case "modules": {
             const state = loadModuleState();
@@ -3207,7 +3308,7 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
             termPrint(arg || "");
             break;
           case "clear":
-            term.textContent = "ARGO DEV TERMINAL v3.1\n>";
+            term.textContent = "ARGO DEV TERMINAL v3.3\n>";
             break;
           default:
             termPrint(`Nieznana komenda: "${name}". Wpisz "help".`);
@@ -3255,7 +3356,7 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
 
       document.getElementById("actionExportConfig").addEventListener("click", () => {
         const config = {
-          build: "ARGO 3.1 ALFA",
+          build: "ARGO 3.3 OFFICIAL",
           exportedAt: new Date().toISOString(),
           moduleState: loadModuleState(),
           devNotes: localStorage.getItem("argoDevNotes") || "",
@@ -3354,7 +3455,7 @@ Wpisz "help" aby zobaczyć dostępne komendy. Strzałki ↑/↓ przeglądają hi
         document.getElementById("consoleLogin").classList.remove("hidden");
         document.getElementById("consoleOutput").textContent =
           "Status: Offline\n" +
-          "Build: ARGO 3.1 ALFA\n" +
+          "Build: ARGO 3.3 OFFICIAL\n" +
           "Dostęp: zablokowany";
       }
 
